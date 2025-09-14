@@ -6,7 +6,7 @@
 #include <algorithm>
 
 /*
-http://localhost:8088/volume?value=1.0
+http://localhost:8088/volume?value=20
 */
 
 #define INITIAL_PERCENT 20
@@ -16,8 +16,58 @@ http://localhost:8088/volume?value=1.0
 static std::atomic<float> gVolume(1.0f);
 int percent = INITIAL_PERCENT;
 
+static const char* SHM_NAME = "VolumeCtrlSharedMemory";
+
+struct VolumeData {
+    int percent;
+};
+
+struct VolumeData volData;
+
+/**************************************************************************************/
+static VolumeData* GetSharedVolume() {
+  static VolumeData* shared = nullptr;
+
+  if (shared) 
+    return shared;
+
+  HANDLE hMapFile = CreateFileMappingA(
+    INVALID_HANDLE_VALUE,    // use paging file (RAM only)
+    NULL,
+    PAGE_READWRITE,
+    0,
+    sizeof(VolumeData),
+    SHM_NAME
+  );
+
+  if (!hMapFile) {
+    shared = &volData;
+    shared->percent = INITIAL_PERCENT;
+  }
+  else
+  {
+    shared = (VolumeData*)MapViewOfFile(
+      hMapFile,
+      FILE_MAP_ALL_ACCESS,
+      0, 0,
+      sizeof(VolumeData)
+    );
+
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+      // another instance already created it
+    }
+    else
+      shared->percent = INITIAL_PERCENT;
+  }
+
+  return shared;
+}
+
+/**************************************************************************************/
 CVolumeCtrl::CVolumeCtrl(audioMasterCallback audioMaster) : AudioEffectX(audioMaster, 1, NUM_PARAMS)
 {
+  percent = GetSharedVolume()->percent;
+  
   float dB = MIN_DB + (percent / 100.0f) * (MAX_DB - MIN_DB);
   fCurrentVol = std::pow(10.0f, dB / 20.0f);
   gVolume.store(fCurrentVol);
@@ -51,7 +101,10 @@ CVolumeCtrl::CVolumeCtrl(audioMasterCallback audioMaster) : AudioEffectX(audioMa
           percent = std::stoi(value);
         }
 
-        // Map 0–100 ->  dB to 0 dB
+        percent = std::clamp(percent, 0, 100);
+        GetSharedVolume()->percent = percent;
+
+        // Map 0-100 ->  dB to 0 dB
         float dB = MIN_DB + (percent / 100.0f) * (MAX_DB - MIN_DB);
 
         // Convert dB to linear gain
@@ -60,11 +113,8 @@ CVolumeCtrl::CVolumeCtrl(audioMasterCallback audioMaster) : AudioEffectX(audioMa
         gVolume.store(newVol);
       }
 
-      percent = std::clamp(percent, 0, 100);
-
       res.set_content(std::to_string(percent), "text / plain");
     });
-
 
     // Run on localhost:8080
     svr.listen("0.0.0.0", 8088);
