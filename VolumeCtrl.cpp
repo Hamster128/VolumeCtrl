@@ -14,14 +14,8 @@ http://localhost:8088/volume?value=20
 #define MAX_DB  15.0f
 
 static std::atomic<float> gVolume(1.0f);
-int percent = INITIAL_PERCENT;
 
 static const char* SHM_NAME = "VolumeCtrlSharedMemory";
-
-struct VolumeData {
-    int percent;
-};
-
 struct VolumeData volData;
 
 /**************************************************************************************/
@@ -66,14 +60,13 @@ static VolumeData* GetSharedVolume() {
 /**************************************************************************************/
 CVolumeCtrl::CVolumeCtrl(audioMasterCallback audioMaster) : AudioEffectX(audioMaster, 1, NUM_PARAMS)
 {
-  percent = GetSharedVolume()->percent;
-  
-  float dB = MIN_DB + (percent / 100.0f) * (MAX_DB - MIN_DB);
-  fCurrentVol = std::pow(10.0f, dB / 20.0f);
-  gVolume.store(fCurrentVol);
-
   if (audioMaster)
   {
+    // Default values
+    percent = INITIAL_PERCENT;
+    fMinDB = MIN_DB;
+    fMaxDB = MAX_DB;
+
     setNumInputs(NUM_INPUTS);
     setNumOutputs(NUM_OUTPUTS);
     canProcessReplacing();
@@ -82,11 +75,17 @@ CVolumeCtrl::CVolumeCtrl(audioMasterCallback audioMaster) : AudioEffectX(audioMa
     programsAreChunks(true);
   }
 
+  percent = GetSharedVolume()->percent;
+
+  float dB = fMinDB + (percent / 100.0f) * (fMaxDB - fMinDB);
+  fCurrentVol = std::pow(10.0f, dB / 20.0f);
+  gVolume.store(fCurrentVol);
+
   // Launch HTTP server in background thread
-  std::thread([]() {
+  std::thread([this]() {
     httplib::Server svr;
 
-    svr.Get("/volume", [](const httplib::Request& req, httplib::Response& res) {
+    svr.Get("/volume", [this](const httplib::Request& req, httplib::Response& res) {
 
       if (req.has_param("value")) {
         std::string value = req.get_param_value("value");
@@ -105,7 +104,7 @@ CVolumeCtrl::CVolumeCtrl(audioMasterCallback audioMaster) : AudioEffectX(audioMa
         GetSharedVolume()->percent = percent;
 
         // Map 0-100 ->  dB to 0 dB
-        float dB = MIN_DB + (percent / 100.0f) * (MAX_DB - MIN_DB);
+        float dB = fMinDB + (percent / 100.0f) * (fMaxDB - fMinDB);
 
         // Convert dB to linear gain
         float newVol = std::pow(10.0f, dB / 20.0f);
@@ -181,5 +180,58 @@ void CVolumeCtrl::processReplacing(float** inputs, float** outputs, VstInt32 sam
 
     outL[i] = inL[i] * fCurrentVol;
     outR[i] = inR[i] * fCurrentVol;
+  }
+}
+
+void CVolumeCtrl::setParameter(VstInt32 index, float value) {
+  switch (index) {
+  case kParamVolume:
+    percent = static_cast<int>(value * 100.0f);
+    percent = std::clamp(percent, 0, 100);
+    GetSharedVolume()->percent = percent;
+    break;
+  case kParamMinDB:
+    fMinDB = -80.0f + (value * 60.0f); // Example: -80..-20 dB
+    break;
+  case kParamMaxDB:
+    fMaxDB = -10.0f + (value * 40.0f); // Example: -10..+30 dB
+    break;
+  }
+}
+
+/**************************************************************************************/
+float CVolumeCtrl::getParameter(VstInt32 index) {
+  switch (index) {
+  case kParamVolume: return percent / 100.0f;
+  case kParamMinDB:  return (fMinDB + 80.0f) / 60.0f;  // normalize back
+  case kParamMaxDB:  return (fMaxDB + 10.0f) / 40.0f;
+  }
+  return 0.0f;
+}
+
+/**************************************************************************************/
+void CVolumeCtrl::getParameterName(VstInt32 index, char* label) {
+  switch (index) {
+  case kParamVolume: vst_strncpy(label, "Volume", kVstMaxParamStrLen); break;
+  case kParamMinDB:  vst_strncpy(label, "Min dB", kVstMaxParamStrLen); break;
+  case kParamMaxDB:  vst_strncpy(label, "Max dB", kVstMaxParamStrLen); break;
+  }
+}
+
+/**************************************************************************************/
+void CVolumeCtrl::getParameterDisplay(VstInt32 index, char* text) {
+  switch (index) {
+  case kParamVolume: float2string(percent, text, kVstMaxParamStrLen); break;
+  case kParamMinDB:  float2string(fMinDB, text, kVstMaxParamStrLen); break;
+  case kParamMaxDB:  float2string(fMaxDB, text, kVstMaxParamStrLen); break;
+  }
+}
+
+/**************************************************************************************/
+void CVolumeCtrl::getParameterLabel(VstInt32 index, char* label) {
+  switch (index) {
+  case kParamVolume: vst_strncpy(label, "%", kVstMaxParamStrLen); break;
+  case kParamMinDB:  vst_strncpy(label, "dB", kVstMaxParamStrLen); break;
+  case kParamMaxDB:  vst_strncpy(label, "dB", kVstMaxParamStrLen); break;
   }
 }
