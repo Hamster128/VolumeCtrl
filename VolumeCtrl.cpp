@@ -106,7 +106,7 @@ CVolumeCtrl::CVolumeCtrl(audioMasterCallback audioMaster) : AudioEffectX(audioMa
           GetSharedVolume()->fCurrentVol = std::pow(10.0f, dB / 20.0f);
         }
 
-        res.set_content(std::to_string(GetSharedVolume()->percent) + " " + std::to_string(GetSharedVolume()->fCurrentVol) + " " + std::to_string(fCurrentVol) + " " + std::to_string(fMinDB) + " " + std::to_string(fMaxDB), "text / plain");
+        res.set_content(std::to_string(GetSharedVolume()->percent)/* + " " + std::to_string(GetSharedVolume()->fCurrentVol) + " " + std::to_string(fCurrentVol) + " " + std::to_string(fMinDB) + " " + std::to_string(fMaxDB)*/, "text / plain");
       });
 
       // Run on localhost:8080
