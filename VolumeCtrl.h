@@ -6,12 +6,10 @@
 
 struct VolumeData {
   int percent;
+  float fCurrentVol;
 };
 
 enum {
-  kParamVolume = 0,
-  kParamMinDB,
-  kParamMaxDB,
   NUM_PARAMS
 };
 
@@ -26,18 +24,6 @@ public:
   VstInt32 getVendorVersion();
   void processReplacing(float ** inputs, float ** outputs, VstInt32 sampleFrames);
 
-  void setParameter(VstInt32 index, float value);
-  float getParameter(VstInt32 index);
-
-  void getParameterName(VstInt32 index, char * label);
-  void getParameterDisplay(VstInt32 index, char * text);
-  void getParameterLabel(VstInt32 index, char * label);
-
-  float fCurrentVol;
-
 private:
-  int percent;
-  float fMinDB;
-  float fMaxDB;
 };
 

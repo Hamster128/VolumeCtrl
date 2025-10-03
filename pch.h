@@ -11,4 +11,9 @@
 #include "framework.h"
 #include "../vst2.x/audioeffectx.h"
 
+#include "httplib.h"
+#include <thread>
+#include <atomic>
+#include <algorithm>
+
 #endif //PCH_H

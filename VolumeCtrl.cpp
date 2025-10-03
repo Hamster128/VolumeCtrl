@@ -7,16 +7,23 @@
 
 /*
 http://localhost:8088/volume?value=20
+http://localhost:8088/volume?value=up
+http://localhost:8088/volume?value=down
 */
 
 #define INITIAL_PERCENT 20
-#define MIN_DB -50.0f
-#define MAX_DB  15.0f
-
-static std::atomic<float> gVolume(1.0f);
 
 static const char* SHM_NAME = "VolumeCtrlSharedMemory";
 struct VolumeData volData;
+
+static VolumeData* shared = nullptr;
+float fMinDB = -50.0f;
+float fMaxDB = 15.0f;
+float fCurrentVol = 0;
+
+static httplib::Server svr;
+static std::thread gHttpThread;
+static std::atomic<bool> gServerRunning{ false };
 
 /**************************************************************************************/
 static VolumeData* GetSharedVolume() {
@@ -62,11 +69,6 @@ CVolumeCtrl::CVolumeCtrl(audioMasterCallback audioMaster) : AudioEffectX(audioMa
 {
   if (audioMaster)
   {
-    // Default values
-    percent = INITIAL_PERCENT;
-    fMinDB = MIN_DB;
-    fMaxDB = MAX_DB;
-
     setNumInputs(NUM_INPUTS);
     setNumOutputs(NUM_OUTPUTS);
     canProcessReplacing();
@@ -75,49 +77,47 @@ CVolumeCtrl::CVolumeCtrl(audioMasterCallback audioMaster) : AudioEffectX(audioMa
     programsAreChunks(true);
   }
 
-  percent = GetSharedVolume()->percent;
+  float dB = fMinDB + (GetSharedVolume()->percent / 100.0f) * (fMaxDB - fMinDB);
+  GetSharedVolume()->fCurrentVol = std::pow(10.0f, dB / 20.0f);
 
-  float dB = fMinDB + (percent / 100.0f) * (fMaxDB - fMinDB);
-  fCurrentVol = std::pow(10.0f, dB / 20.0f);
-  gVolume.store(fCurrentVol);
+  if (!gServerRunning.exchange(true)) {
+    std::thread([]() {
+      svr.Get("/volume", [](const httplib::Request& req, httplib::Response& res) {
 
-  // Launch HTTP server in background thread
-  std::thread([this]() {
-    httplib::Server svr;
+        if (req.has_param("value")) {
+          std::string value = req.get_param_value("value");
 
-    svr.Get("/volume", [this](const httplib::Request& req, httplib::Response& res) {
+          if (value == "up") {
+            GetSharedVolume()->percent += 2;
+          }
+          else if (value == "down") {
+            GetSharedVolume()->percent -= 2;
+          }
+          else {
+            GetSharedVolume()->percent = std::stoi(value);
+          }
 
-      if (req.has_param("value")) {
-        std::string value = req.get_param_value("value");
+          GetSharedVolume()->percent = std::clamp(GetSharedVolume()->percent, 0, 100);
 
-        if (value == "up") {
-          percent += 2;
+          // Map 0-100 ->  dB to 0 dB
+          float dB = fMinDB + (GetSharedVolume()->percent / 100.0f) * (fMaxDB - fMinDB);
+
+          // Convert dB to linear gain
+          GetSharedVolume()->fCurrentVol = std::pow(10.0f, dB / 20.0f);
         }
-        else if (value == "down") {
-          percent -= 2;
-        }
-        else {
-          percent = std::stoi(value);
-        }
 
-        percent = std::clamp(percent, 0, 100);
-        GetSharedVolume()->percent = percent;
+        res.set_content(std::to_string(GetSharedVolume()->percent) + " " + std::to_string(GetSharedVolume()->fCurrentVol) + " " + std::to_string(fCurrentVol) + " " + std::to_string(fMinDB) + " " + std::to_string(fMaxDB), "text / plain");
+      });
 
-        // Map 0-100 ->  dB to 0 dB
-        float dB = fMinDB + (percent / 100.0f) * (fMaxDB - fMinDB);
-
-        // Convert dB to linear gain
-        float newVol = std::pow(10.0f, dB / 20.0f);
-
-        gVolume.store(newVol);
+      // Run on localhost:8080
+      while (!svr.listen("0.0.0.0", 8088))
+      {
+        Sleep(100);
       }
 
-      res.set_content(std::to_string(percent), "text / plain");
-    });
+    }).detach();
+  }
 
-    // Run on localhost:8080
-    svr.listen("0.0.0.0", 8088);
-  }).detach();
 }
 
 /**************************************************************************************/
@@ -161,18 +161,18 @@ void CVolumeCtrl::processReplacing(float** inputs, float** outputs, VstInt32 sam
   float* outL = outputs[0]; // left output channel
   float* outR = outputs[1]; // right output channel
 
-  float vol = gVolume.load();
+  float vol = GetSharedVolume()->fCurrentVol;
 
   for (VstInt32 i = 0; i < sampleFrames; i++)
   {
     if (fCurrentVol > vol) {
-      fCurrentVol -= 0.001;
+      fCurrentVol -= 0.0001;
 
       if (fCurrentVol < vol)
         fCurrentVol = vol;
     }
     else if (fCurrentVol < vol) {
-      fCurrentVol += 0.001;
+      fCurrentVol += 0.0001;
 
       if (fCurrentVol > vol)
         fCurrentVol = vol;
@@ -183,55 +183,3 @@ void CVolumeCtrl::processReplacing(float** inputs, float** outputs, VstInt32 sam
   }
 }
 
-void CVolumeCtrl::setParameter(VstInt32 index, float value) {
-  switch (index) {
-  case kParamVolume:
-    percent = static_cast<int>(value * 100.0f);
-    percent = std::clamp(percent, 0, 100);
-    GetSharedVolume()->percent = percent;
-    break;
-  case kParamMinDB:
-    fMinDB = -80.0f + (value * 60.0f); // Example: -80..-20 dB
-    break;
-  case kParamMaxDB:
-    fMaxDB = -10.0f + (value * 40.0f); // Example: -10..+30 dB
-    break;
-  }
-}
-
-/**************************************************************************************/
-float CVolumeCtrl::getParameter(VstInt32 index) {
-  switch (index) {
-  case kParamVolume: return percent / 100.0f;
-  case kParamMinDB:  return (fMinDB + 80.0f) / 60.0f;  // normalize back
-  case kParamMaxDB:  return (fMaxDB + 10.0f) / 40.0f;
-  }
-  return 0.0f;
-}
-
-/**************************************************************************************/
-void CVolumeCtrl::getParameterName(VstInt32 index, char* label) {
-  switch (index) {
-  case kParamVolume: vst_strncpy(label, "Volume", kVstMaxParamStrLen); break;
-  case kParamMinDB:  vst_strncpy(label, "Min dB", kVstMaxParamStrLen); break;
-  case kParamMaxDB:  vst_strncpy(label, "Max dB", kVstMaxParamStrLen); break;
-  }
-}
-
-/**************************************************************************************/
-void CVolumeCtrl::getParameterDisplay(VstInt32 index, char* text) {
-  switch (index) {
-  case kParamVolume: float2string(percent, text, kVstMaxParamStrLen); break;
-  case kParamMinDB:  float2string(fMinDB, text, kVstMaxParamStrLen); break;
-  case kParamMaxDB:  float2string(fMaxDB, text, kVstMaxParamStrLen); break;
-  }
-}
-
-/**************************************************************************************/
-void CVolumeCtrl::getParameterLabel(VstInt32 index, char* label) {
-  switch (index) {
-  case kParamVolume: vst_strncpy(label, "%", kVstMaxParamStrLen); break;
-  case kParamMinDB:  vst_strncpy(label, "dB", kVstMaxParamStrLen); break;
-  case kParamMaxDB:  vst_strncpy(label, "dB", kVstMaxParamStrLen); break;
-  }
-}
