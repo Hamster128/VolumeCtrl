@@ -166,13 +166,13 @@ void CVolumeCtrl::processReplacing(float** inputs, float** outputs, VstInt32 sam
   for (VstInt32 i = 0; i < sampleFrames; i++)
   {
     if (fCurrentVol > vol) {
-      fCurrentVol -= 0.0001;
+      fCurrentVol -= 0.00001;
 
       if (fCurrentVol < vol)
         fCurrentVol = vol;
     }
     else if (fCurrentVol < vol) {
-      fCurrentVol += 0.0001;
+      fCurrentVol += 0.00001;
 
       if (fCurrentVol > vol)
         fCurrentVol = vol;
